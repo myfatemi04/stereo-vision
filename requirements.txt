@@ -1,0 +1,9 @@
+roslibpy
+numpy
+pyyaml
+rosbags # For .db3 ROS bags.
+torch
+ipykernel
+# git+https://github.com/IDEA-Research/GroundingDINO
+huggingface-hub
+
