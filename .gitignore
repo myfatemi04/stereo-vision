@@ -4,3 +4,4 @@ M-MULTI-SLOW-KAIST
 run4-2-camera
 run4-2-lidar
 *.mp4
+*.ply
