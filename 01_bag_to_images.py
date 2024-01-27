@@ -19,7 +19,8 @@ def extract(bag_dir, topic, output_dir):
         # Iterate over messages
         with tqdm.tqdm(desc='Reading images.') as pbar:
             for connection, timestamp, rawdata in reader.messages():
-                # Check if the message topic matches the specified format
+                # Check if the message topic matches.
+                # msgtype should be sensor_msgs/msg/CompressedImage
                 if connection.topic == topic:
                     count += 1
                     msg = deserialize_cdr(rawdata, connection.msgtype)

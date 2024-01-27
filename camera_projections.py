@@ -1,3 +1,4 @@
+import pickle
 import numpy as np
 import yaml
 import matplotlib.pyplot as plt
@@ -84,7 +85,6 @@ def test_camera_projection():
     cameras_to_use = ['front_left', 'front_left_center', 'front_right']
     base_path = 'M-MULTI-SLOW-KAIST_images'
     index = 1
-    # point = np.array([4, -1, 10, 1.0])
     X, Y, Z = np.meshgrid(np.linspace(0, 1, 8), np.linspace(0, 1, 8), np.linspace(0, 1, 8))
     points = np.stack((X.flatten(), Y.flatten(), Z.flatten(), np.ones(X.flatten().shape[0])), axis=1)
     points[:, 0] += 10
