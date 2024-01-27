@@ -6,3 +6,7 @@ run4-2-lidar
 *.mp4
 *.ply
 *_coco_format
+*_yolo_format
+*_yolo_format_for_cross_validation
+*_images
+frame.png
