@@ -2,6 +2,7 @@
 # Using a more powerful labeler with a bit of manual feedback.
 
 import logging
+import math
 import torch
 import cv2
 import os
@@ -20,15 +21,13 @@ def convert_boxes(boxes: torch.Tensor):
     boxes = torch.stack((x1, y1, x2, y2), dim=-1)
     return boxes
 
-def main(bag_id, camera_name, output_dir):
+def do_export(bag_id, camera_name, output_dir):
     CAR_CLASS_ID = 0
 
     logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(message)s')
 
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-        os.makedirs(os.path.join(output_dir, "images"))
-        os.makedirs(os.path.join(output_dir, "labels"))
 
     foundation_model_annotations_path = f'{bag_id}/{camera_name}_results.pt'
     foundation_model_annotations = torch.load(foundation_model_annotations_path)
@@ -50,9 +49,20 @@ def main(bag_id, camera_name, output_dir):
     # Exports to a YOLOv5 folder structure.
     # $DATASET_ROOT/{train, test, val}/{images, labels}/{image_id}.{png, txt}
 
+    all_image_ids = list(range(len(foundation_model_annotations)))
+    NUM_FOLDS = 5
+    fold_size = math.ceil(len(all_image_ids) / NUM_FOLDS)
+
     for image_id, (boxes, confidences, labels) in tqdm.tqdm(enumerate(foundation_model_annotations), desc='Saving images and annotations', total=len(foundation_model_annotations)):
         _, frame = cap.read()
         h, w, _ = frame.shape
+
+        fold_id = image_id // fold_size
+        fold_subdir = f'fold_{fold_id}'
+        fold_path = os.path.join(output_dir, "cameras", camera_name, "folds", fold_subdir)
+        if not os.path.exists(fold_path):
+            os.makedirs(os.path.join(fold_path, "images"))
+            os.makedirs(os.path.join(fold_path, "labels"))
 
         scale = torch.tensor([w, h, w, h])
         # Boxes use proportional coordinates
@@ -70,17 +80,22 @@ def main(bag_id, camera_name, output_dir):
 
         # Use consistent image_id (index within original video file)
         # Only write images to disk if they do not exist there already.
-        image_path = os.path.join(output_dir, "images", "image_%d.png" % image_id)
+        image_path = os.path.join(fold_path, "images", "image_%d.png" % image_id)
         if not os.path.exists(image_path):
             cv2.imwrite(image_path, frame)
 
         # Write labels.
-        labels_path = os.path.join(output_dir, "labels", "image_%d.txt" % image_id)
+        labels_path = os.path.join(fold_path, "labels", "image_%d.txt" % image_id)
         labels_string = ''
         for box in boxes:
             # Do not scale to original size; use proportional coordinates.
             x1, y1, x2, y2 = box
-            labels_string += f"{CAR_CLASS_ID} {x1} {y1} {x2} {y2}\n"
+            # Format: x_center, y_center, width, height
+            x_center = (x1 + x2) / 2
+            y_center = (y1 + y2) / 2
+            width = x2 - x1
+            height = y2 - y1
+            labels_string += f"{CAR_CLASS_ID} {x_center} {y_center} {width} {height}\n"
         
         # Write labels to disk.
         with open(labels_path, 'w') as f:
@@ -93,21 +108,33 @@ def main(bag_id, camera_name, output_dir):
 # bag_id: {bag_id}
 # camera_name: {camera_name}
 
-path: ../../{output_dir}  # dataset root dir
-train: images/  # train images (relative to 'path')
-val: images/  # val images (relative to 'path')
-test:  # test images (optional)
+path: ../{output_dir}  # dataset root dir
+# You can update these.
+# `train` and `val` are (relative to 'path')
+train:
+ - cameras/{camera_name}/folds/fold_0/images/
+ - cameras/{camera_name}/folds/fold_1/images/
+ - cameras/{camera_name}/folds/fold_2/images/
+ - cameras/{camera_name}/folds/fold_3/images/
+# Validation images
+val:
+ - cameras/{camera_name}/folds/fold_4/images/
+# Optional
+test:
 
 # Classes
 names:
   {CAR_CLASS_ID}: car
 """.strip() + "\n"
     
-    with open(os.path.join(output_dir, "dataset.yaml"), 'w') as f:
+    with open(os.path.join(output_dir, f"dataset_{camera_name}.yaml"), 'w') as f:
         f.write(yaml)
     
+def main():
+    bag_id = 'M-MULTI-SLOW-KAIST'
+    output_dir = "M-MULTI-SLOW-KAIST_yolo_format_for_cross_validation"
+    for camera_name in ['front_left_center']:
+        do_export(bag_id, camera_name, output_dir)
+
 if __name__ == '__main__':
-    BAG_ID = 'M-MULTI-SLOW-KAIST'
-    CAMERA_NAME = 'front_left_center'
-    output_dir = "M-MULTI-SLOW-KAIST_yolo_format"
-    main(BAG_ID, CAMERA_NAME, output_dir)
+    main()
