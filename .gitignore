@@ -10,3 +10,5 @@ run4-2-lidar
 *_yolo_format_for_cross_validation
 *_images
 frame.png
+yolov5
+M-MULTI-SLOW-KAIST_lidar/

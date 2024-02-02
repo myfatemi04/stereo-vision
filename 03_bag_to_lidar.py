@@ -38,6 +38,7 @@ def extract(bag_dir, topic, output_dir):
                         with open(path, 'wb') as f:
                             pickle.dump(data, f)
                     pbar.update(1)
+                    timestamps.append(timestamp)
     
     # Also store a `timestamps.json` file.
     with open(f'{output_dir}/timestamps.json', 'w') as f:

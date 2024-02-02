@@ -7,6 +7,7 @@ def main(bag_path):
         unseen_topics = set(topics)
         remaining = len(topics)
         matrices = {}
+        distortions = {}
         print("Detected CameraInfo topics:", topics)
         for (connection, timestamp, raw_data) in reader.messages():
             topic = connection.topic
@@ -16,19 +17,16 @@ def main(bag_path):
                 data = deserialize_cdr(raw_data, msgtype)
 
                 # See https://docs.ros.org/en/melodic/api/sensor_msgs/html/msg/CameraInfo.html
-                # intrinsics = list(data.p)
-                # row1 = intrinsics[0:4]
-                # row2 = intrinsics[4:8]
-                # row3 = intrinsics[8:12]
                 intrinsics = list(data.k)
                 row1 = intrinsics[0:3]
                 row2 = intrinsics[3:6]
                 row3 = intrinsics[6:9]
                 # Manually override cx and cy values
-                row1[-1] = 2064/2
-                row2[-1] = 960/2
+                # row1[-1] = 2064/2
+                # row2[-1] = 960/2
                 camera_name = topic.split('/')[-2]
                 matrices[camera_name] = [row1, row2, row3]
+                distortions[camera_name] = list(data.d)
                 unseen_topics.remove(topic)
                 remaining -= 1
 
@@ -37,12 +35,14 @@ def main(bag_path):
 
         print("Intrinsic matrices:")
         print(matrices)
+        print("Distortion coefficients:")
+        print(distortions)
 
         # Output as JSON
         import json
 
-        with open('intrinsic_matrices.json', 'w') as f:
-            json.dump(matrices, f, indent=2)
+        with open('intrinsic_models.json', 'w') as f:
+            json.dump({"matrices": matrices, "distortions": distortions}, f, indent=2)
 
 if __name__ == '__main__':
     import sys
