@@ -5,50 +5,91 @@ import matplotlib.pyplot as plt
 import cv2
 import json
 
-def create_extrinsics(x, y, z, yaw):
+def create_extrinsics(x, y, z, yaw, is_camera=True):
     """
     An extrinsic camera matrix follows the following format:
         [R t]
     where R is a 3x3 rotation matrix and t is a 3x1 translation vector.
     """
     # 1. translate by -x, -y, -z
-    tra_mat = np.array([
-        [1, 0, 0, -x],
-        [0, 1, 0, -y],
-        [0, 0, 1, -z],
-        [0, 0, 0, 1],
-    ])
+    if is_camera:
+        tra = np.array([
+            [1, 0, 0, -x],
+            [0, 1, 0, -y],
+            [0, 0, 1, -z],
+            [0, 0, 0, 1],
+        ])
+    else:
+        tra = np.array([
+            [1, 0, 0, x],
+            [0, 1, 0, y],
+            [0, 0, 1, z],
+            [0, 0, 0, 1],
+        ])
     # 2. rotate by -yaw
-    rot_mat = np.array([
-        [np.cos(-yaw), -np.sin(-yaw), 0, 0],
-        [np.sin(-yaw), np.cos(-yaw), 0, 0],
+    rot = np.array([
+        [np.cos(yaw), -np.sin(yaw), 0, 0],
+        [np.sin(yaw), np.cos(yaw), 0, 0],
         [0, 0, 1, 0],
         [0, 0, 0, 1],
     ])
     # 3. permute axes: x -> z, y -> x, z -> y
-    fix_order = np.array([
-        [0, 1, 0, 0],
-        [0, 0, 1, 0],
-        [1, 0, 0, 0],
-        [0, 0, 0, 1],
-    ])
-    Rt = fix_order @ rot_mat @ tra_mat
+    if is_camera:
+        permute = np.array([
+            [0, 1, 0, 0],
+            [0, 0, 1, 0],
+            [1, 0, 0, 0],
+            [0, 0, 0, 1],
+        ])
+        Rt = permute @ rot @ tra
+    else:
+        Rt = rot @ tra
+    return Rt
 
-    # t = np.array([x, y, z])
-    # R = np.array([
-    #     [np.cos(yaw), -np.sin(yaw), 0],
-    #     [np.sin(yaw), np.cos(yaw), 0],
-    #     [0, 0, 1]
+def create_extrinsics_2(x, y, z, yaw):
+    """
+    An extrinsic camera matrix follows the following format:
+        [R t]
+    where R is a 3x3 rotation matrix and t is a 3x1 translation vector.
+    """
+    # # 1. translate by -x, -y, -z
+    # tra_mat = np.array([
+    #     [1, 0, 0, -x],
+    #     [0, 1, 0, -y],
+    #     [0, 0, 1, -z],
+    #     [0, 0, 0, 1],
     # ])
-    # Rt = np.concatenate((R, t.reshape(3, 1)), axis=1)
-    # Derived from `plot_camera` function
+    # # 2. rotate by -yaw
+    # rot_mat = np.array([
+    #     [np.cos(-yaw), -np.sin(-yaw), 0, 0],
+    #     [np.sin(-yaw), np.cos(-yaw), 0, 0],
+    #     [0, 0, 1, 0],
+    #     [0, 0, 0, 1],
+    # ])
+    # # 3. permute axes: x -> z, y -> x, z -> y
     # fix_order = np.array([
     #     [0, 1, 0, 0],
     #     [0, 0, 1, 0],
     #     [1, 0, 0, 0],
     #     [0, 0, 0, 1],
     # ])
-    # Rt = np.matmul(Rt, fix_order)
+    # Rt = fix_order @ rot_mat @ tra_mat
+
+    t = np.array([x, y, z])
+    R = np.array([
+        [np.cos(yaw), -np.sin(yaw), 0],
+        [np.sin(yaw), np.cos(yaw), 0],
+        [0, 0, 1]
+    ])
+    Rt = np.concatenate((R, t.reshape(3, 1)), axis=1)
+    # Derived from `plot_camera` function
+    fix_order = np.array([
+        [0, 0, 1, 0],
+        [1, 0, 0, 0],
+        [0, 1, 0, 0],
+        [0, 0, 0, 1],
+    ])
+    Rt = np.matmul(Rt, fix_order)
 
     return Rt
 
@@ -113,17 +154,38 @@ def test_camera_projection():
     base_path = 'M-MULTI-SLOW-KAIST_images'
     index = 1
 
+    front_ext = create_extrinsics(2.342, 0, 0.448, 0, is_camera=False)
+    left_ext = create_extrinsics(1.549, 0.267, 0.543, 2.0943951024, is_camera=False)
+    right_ext = create_extrinsics(1.549, -0.267, 0.543, -2.0943951024, is_camera=False)
+
+    index = 1
     with open(f"M-MULTI-SLOW-KAIST_lidar/luminar_front_points/{index}.pkl", "rb") as f:
         xyz_front = pickle.load(f)[0]
-    
+        xyz_front = (front_ext @ np.concatenate((xyz_front, np.ones((len(xyz_front), 1))), axis=1).T).T
+
     with open(f"M-MULTI-SLOW-KAIST_lidar/luminar_left_points/{index}.pkl", "rb") as f:
         xyz_left = pickle.load(f)[0]
+        xyz_left = (left_ext @ np.concatenate((xyz_left, np.ones((len(xyz_left), 1))), axis=1).T).T
 
     with open(f"M-MULTI-SLOW-KAIST_lidar/luminar_right_points/{index}.pkl", "rb") as f:
         xyz_right = pickle.load(f)[0]
+        xyz_right = (right_ext @ np.concatenate((xyz_right, np.ones((len(xyz_right), 1))), axis=1).T).T
 
-    xyz = xyz_front # np.concatenate((xyz_front, xyz_left, xyz_right), axis=0)
-    points = np.concatenate((xyz, np.ones((xyz.shape[0], 1))), axis=1)
+    xyz = np.concatenate((xyz_front, xyz_left, xyz_right), axis=0)
+    points = xyz # include the fourth dimension
+    # xyz = xyz[:, :3]
+
+    # with open(f"M-MULTI-SLOW-KAIST_lidar/luminar_front_points/{index}.pkl", "rb") as f:
+    #     xyz_front = pickle.load(f)[0]
+    
+    # with open(f"M-MULTI-SLOW-KAIST_lidar/luminar_left_points/{index}.pkl", "rb") as f:
+    #     xyz_left = pickle.load(f)[0]
+
+    # with open(f"M-MULTI-SLOW-KAIST_lidar/luminar_right_points/{index}.pkl", "rb") as f:
+    #     xyz_right = pickle.load(f)[0]
+
+    # xyz = xyz_front # np.concatenate((xyz_front, xyz_left, xyz_right), axis=0)
+    # points = np.concatenate((xyz, np.ones((xyz.shape[0], 1))), axis=1)
 
     with open("intrinsic_models.json", "r") as f:
         intrinsic_models = json.load(f)
@@ -131,8 +193,8 @@ def test_camera_projection():
         distortion_coefficients = {k: np.array(v) for k, v in intrinsic_models['distortions'].items()}
     use_yaml = False
     extrinsics = load_extrinsics(use_yaml)
-    if use_yaml:
-        extrinsics = {k: invert_extrinsics(v) for k, v in extrinsics.items()}
+    extrinsics = {k: invert_extrinsics(v) for k, v in extrinsics.items()}
+    # if use_yaml:
     
     undistort = False
 
@@ -185,16 +247,24 @@ def test_camera_projection_opencv():
     base_path = 'M-MULTI-SLOW-KAIST_images'
     index = 1
 
+    front_ext = create_extrinsics(2.342, 0, 0.448, 0, is_camera=False)
+    left_ext = create_extrinsics(1.549, 0.267, 0.543, 2.0943951024, is_camera=False)
+    right_ext = create_extrinsics(1.549, -0.267, 0.543, -2.0943951024, is_camera=False)
+
+    index = 1
     with open(f"M-MULTI-SLOW-KAIST_lidar/luminar_front_points/{index}.pkl", "rb") as f:
         xyz_front = pickle.load(f)[0]
-    
+        xyz_front = (front_ext @ np.concatenate((xyz_front, np.ones((len(xyz_front), 1))), axis=1).T).T
+
     with open(f"M-MULTI-SLOW-KAIST_lidar/luminar_left_points/{index}.pkl", "rb") as f:
         xyz_left = pickle.load(f)[0]
+        xyz_left = (left_ext @ np.concatenate((xyz_left, np.ones((len(xyz_left), 1))), axis=1).T).T
 
     with open(f"M-MULTI-SLOW-KAIST_lidar/luminar_right_points/{index}.pkl", "rb") as f:
         xyz_right = pickle.load(f)[0]
+        xyz_right = (right_ext @ np.concatenate((xyz_right, np.ones((len(xyz_right), 1))), axis=1).T).T
 
-    xyz = xyz_front # np.concatenate((xyz_front, xyz_left, xyz_right), axis=0)
+    xyz = np.concatenate((xyz_front, xyz_left, xyz_right), axis=0)
     points = np.ascontiguousarray(xyz)
     # points = np.concatenate((xyz, np.ones((xyz.shape[0], 1))), axis=1)
 
@@ -257,5 +327,5 @@ def test_camera_projection_opencv():
 
     plt.savefig("camera_projections.png")
 
-test_camera_projection_opencv()
-# test_camera_projection()
+# test_camera_projection_opencv()
+test_camera_projection()

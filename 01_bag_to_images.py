@@ -50,6 +50,9 @@ Topic: /vehicle_8/camera/rear_right/camera_info | Type: sensor_msgs/msg/CameraIn
 Topic: /vehicle_8/camera/rear_right/image/compressed
 '''
 
+# python 01_bag_to_images.py M-MULTI-SLOW-KAIST /vehicle_8/camera/front_left/image/compressed M-MULTI-SLOW-KAIST_images/front_left
+# python 01_bag_to_images.py M-MULTI-SLOW-KAIST /vehicle_8/camera/front_right/image/compressed M-MULTI-SLOW-KAIST_images/front_right
+
 def main():
     if len(sys.argv) != 4:
         print("Usage: python bag_to_images.py <bag_dir> <topic> <output_dir>")
