@@ -19,25 +19,31 @@ camera_ts = {
 
 earliest_timestamp = None
 
-for camera in ['front_left_center']:
-    with open(os.path.join(base_cameras_dir, camera, "timestamps.json"), "r") as f:
-        camera_ts[camera] = json.load(f)
+# for camera in ['front_left_center']:
+#     with open(os.path.join(base_cameras_dir, camera, "timestamps.json"), "r") as f:
+#         camera_ts[camera] = json.load(f)
 
-        if earliest_timestamp is None or camera_ts[camera][0] < earliest_timestamp:
-            earliest_timestamp = camera_ts[camera][0]
+#         if earliest_timestamp is None or camera_ts[camera][0] < earliest_timestamp:
+#             earliest_timestamp = camera_ts[camera][0]
 
-lidar_ts = {
-    'luminar_left_points': [],
-    'luminar_right_points': [],
-    'luminar_front_points': [],
-}
+with open("./bags/extracted/M-MULTI-SLOW-KAIST/camera/timestamps.json", "r") as f:
+    camera_ts = json.load(f)
 
-for lidar in ['luminar_front_points', 'luminar_left_points', 'luminar_right_points']:
-    with open(os.path.join(base_lidar_dir, lidar, "timestamps.json"), "r") as f:
-        lidar_ts[lidar] = json.load(f)
+# lidar_ts = {
+#     'luminar_left_points': [],
+#     'luminar_right_points': [],
+#     'luminar_front_points': [],
+# }
+            
+with open("./bags/extracted/M-MULTI-SLOW-KAIST/lidar/timestamps.json", "r") as f:
+    lidar_ts = json.load(f)
+
+# for lidar in ['luminar_front_points', 'luminar_left_points', 'luminar_right_points']:
+#     with open(os.path.join(base_lidar_dir, lidar, "timestamps.json"), "r") as f:
+#         lidar_ts[lidar] = json.load(f)
 
 # Look into front_left_center/255
-target_timestamp = camera_ts['front_left_center'][255]
+target_timestamp = camera_ts['front_left_center'][995]
 
 for camera in camera_ts:
     closest_index = -1

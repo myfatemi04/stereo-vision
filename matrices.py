@@ -90,7 +90,7 @@ def plot_camera(ax: Axes3D, extrinsic, intrinsic=None):
     z = [*points_in_world_frame[:, 2], points_in_world_frame[0, 2]]
     ax.plot(x, y, z, color='black')
 
-def create_camera_extrinsics(x, y, z, yaw, is_camera=True):
+def create_camera_extrinsics(x, y, z, yaw):
     """
     An extrinsic camera matrix follows the following format:
         [R t]
@@ -119,20 +119,12 @@ def create_camera_extrinsics(x, y, z, yaw, is_camera=True):
     Consider this from the perspective of the camera. A point at (tx, ty, tz) must go to the point (0, 0, 0) from the perspective of the camera.
     So this is the first part.
     """
-    if is_camera:
-        translation = np.array([
-            [1, 0, 0, -x],
-            [0, 1, 0, -y],
-            [0, 0, 1, -z],
-            [0, 0, 0, 1],
-        ])
-    else:
-        translation = np.array([
-            [1, 0, 0, x],
-            [0, 1, 0, y],
-            [0, 0, 1, z],
-            [0, 0, 0, 1],
-        ])
+    translation = np.array([
+        [1, 0, 0, -x],
+        [0, 1, 0, -y],
+        [0, 0, 1, -z],
+        [0, 0, 0, 1],
+    ])
     """
     The next step is to rotate. If we ignore the "yaw" component for a second, imagine the camera is pointing straight ahead.
 
@@ -169,6 +161,35 @@ def create_camera_extrinsics(x, y, z, yaw, is_camera=True):
     Rt = rot @ translation
     return Rt
 
+def create_lidar_extrinsics(x, y, z, yaw):
+    translation = np.array([
+        [1, 0, 0, x],
+        [0, 1, 0, y],
+        [0, 0, 1, z],
+        [0, 0, 0, 1]
+    ])
+    # rotation = np.array([
+    #     [np.cos(yaw), -np.sin(yaw), 0, 0],
+    #     [np.sin(yaw),  np.cos(yaw), 0, 0],
+    #     [          0,            0, 1, 0],
+    #     [          0,            0, 0, 1],
+    # ])
+    rotation = np.array([
+        # [np.sin(yaw), np.cos(yaw), 0, 0],
+        # [0, 0, 1, 0],
+        # [np.cos(yaw), -np.sin(yaw), 0, 0],
+        # [0, 0, 0, 1],
+        # [0, 1, 0, 0],
+        # [0, 0, 1, 0],
+        # [1, 0, 0, 0],
+        # [0, 0, 0, 1],
+        [np.cos(yaw), -np.sin(yaw), 0, 0],
+        [np.sin(yaw),  np.cos(yaw), 0, 0],
+        [          0,            0, 1, 0],
+        [          0,            0, 0, 1],
+    ])
+    return translation @ rotation
+
 def invert_extrinsics(extrinsics):
     """
     The extrinsic matrix is 3x4. Therefore, we can't simply take a matrix inverse.
@@ -193,7 +214,7 @@ def invert_extrinsics(extrinsics):
     result[3, 3] = 1
     return result
 
-def get_extrinsics(use_yaml=False):
+def get_camera_extrinsics(use_yaml=False):
     # Load extrinsics
     if use_yaml:
         extrinsics = {}
@@ -219,6 +240,12 @@ def get_extrinsics(use_yaml=False):
     
     return extrinsics
 
+def expand_intrinsics(intrinsics):
+    intrinsics_expanded = np.zeros((4, 4))
+    intrinsics_expanded[:3, :3] = intrinsics
+    intrinsics_expanded[3, 3] = 1
+    return intrinsics_expanded
+
 def main():
     """
     Demo. Display the camera locations and their fields of view.
@@ -229,7 +256,7 @@ def main():
         intrinsics = json.load(f)
         intrinsics = {k: np.array(v) for k, v in intrinsics.items()}
 
-    extrinsics = get_extrinsics()
+    extrinsics = get_camera_extrinsics()
 
     # Create a 3D plot
     fig = plt.figure()
@@ -242,34 +269,28 @@ def main():
         plot_camera(axes, extrinsics[camera], intrinsics.get(camera, None))
 
     # [old] luminar extrinsic ideas
-    luminar_front_extrinsics = create_camera_extrinsics(2.342, 0, 0.448, 0, is_camera=False)
-    luminar_left_extrinsics = create_camera_extrinsics(1.549, 0.267, 0.543, 2.0943951024, is_camera=False)
-    luminar_right_extrinsics = create_camera_extrinsics(1.549, -0.267, 0.543, -2.0943951024, is_camera=False)
+    luminar_front_extrinsics = create_lidar_extrinsics(2.342, 0, 0.448, 0)
+    luminar_left_extrinsics = create_lidar_extrinsics(1.549, 0.267, 0.543, 2.0943951024)
+    luminar_right_extrinsics = create_lidar_extrinsics(1.549, -0.267, 0.543, -2.0943951024)
 
-    index = -1
+    index = 1
     # For plotting LiDAR points
     if index > -1:
-        with open(f"front_{index}.pkl", "rb") as f:
+        base_path = 'bags/extracted/M-MULTI-SLOW-KAIST'
+        with open(f"{base_path}/lidar/luminar_front_points/pcd_{index}.pkl", "rb") as f:
             xyz_front = pickle.load(f)[0]
             xyz_front = (luminar_front_extrinsics @ np.concatenate((xyz_front, np.ones((len(xyz_front), 1))), axis=1).T).T
 
-        with open(f"left_{index}.pkl", "rb") as f:
+        with open(f"{base_path}/lidar/luminar_left_points/pcd_{index}.pkl", "rb") as f:
             xyz_left = pickle.load(f)[0]
             xyz_left = (luminar_left_extrinsics @ np.concatenate((xyz_left, np.ones((len(xyz_left), 1))), axis=1).T).T
 
-        with open(f"right_{index}.pkl", "rb") as f:
+        with open(f"{base_path}/lidar/luminar_right_points/pcd_{index}.pkl", "rb") as f:
             xyz_right = pickle.load(f)[0]
             xyz_right = (luminar_right_extrinsics @ np.concatenate((xyz_right, np.ones((len(xyz_right), 1))), axis=1).T).T
 
-        xyz = np.concatenate((xyz_front, xyz_left, xyz_right), axis=0)
-        xyz = xyz[:, :3]
-        # their luminar points are uncalibrated
-        # xyz = xyz_front
-        # xyz = xyz_left
-        xyz = xyz[::10]
-        xyz1 = np.concatenate((xyz, np.ones((len(xyz), 1))), axis=1)
-        xyz = (extrinsics['front_right'] @ xyz1.T).T[:, :3]
-        axes.scatter(*xyz.T, s=1, zdir='x') # type: ignore
+        lidar_xyz_points = np.concatenate((xyz_front, xyz_left, xyz_right), axis=0)
+        axes.scatter(*lidar_xyz_points.T[:3], s=1) # type: ignore
 
     # Set axis labels
     axes.set_xlabel('X')
@@ -283,9 +304,9 @@ def main():
     axes.set_zlim(-size, size)
 
     display_points = np.array([
-        (10, -3, 1),
-        (10, 0, 1),
-        (10, 3, 1),
+        (15, -3, 1),
+        (15, 0, 1),
+        (15, 3, 1),
     ])
 
     for color, point in zip(AXIS_COLORS, display_points):
@@ -298,25 +319,31 @@ def main():
         camera = render_camera
         print(intrinsics[camera])
 
-        intrinsics_expanded = np.ones((4, 4))
-        intrinsics_expanded[:3, :3] = intrinsics[camera]
-
+        intrinsics_expanded = expand_intrinsics(intrinsics[camera])
         camera_matrix = intrinsics_expanded @ extrinsics[camera]
 
         display_points_augmented = np.concatenate((display_points, np.ones((display_points.shape[0], 1))), axis=1)
 
-        projected_points = (camera_matrix @ np.array(display_points_augmented).T).T
         """
         We started from [x y z 1] and got [pixel_x, pixel_y]. We must normalize away the remaining 2 coordinates.
         """
+        projected_points = (camera_matrix @ np.array(display_points_augmented).T).T
         projected_points = (projected_points / projected_points[:, [3]])[:, :3]
         projected_points = (projected_points / projected_points[:, [2]])[:, :2]
-        axes.set_title("Camera " + camera)
         axes.scatter(projected_points.T[0], projected_points.T[1], c=AXIS_COLORS)
+
+        """
+        We started from [x y z 1] and got [pixel_x, pixel_y]. We must normalize away the remaining 2 coordinates.
+        """
+        projected_points = (camera_matrix @ np.array(lidar_xyz_points).T).T
+        projected_points = (projected_points / projected_points[:, [3]])[:, :3]
+        mask = projected_points[:, 2] > 0
+        projected_points = (projected_points / projected_points[:, [2]])[mask, :2]
+        axes.scatter(projected_points.T[0], projected_points.T[1], s=1)
+        axes.set_title("Camera " + camera)
         axes.set_xlim(0, 2064)
         axes.set_ylim(0, 960)
         axes.set_aspect('equal')
-        print(projected_points)
 
     # Show the plot
     plt.tight_layout()
