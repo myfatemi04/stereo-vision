@@ -8,8 +8,10 @@ import json
 
 # Color scheme (X, Y, Z) -> (R, G, B)
 AXIS_COLORS = [(1, 0, 0), (0, 1, 0), (0, 0, 1)]
+labeled_camera_fov_in_matplotlib = False
 
 def plot_camera(ax: Axes3D, extrinsic, intrinsic=None):
+    global labeled_camera_fov_in_matplotlib
     """
     Note that we did R @ T. Thus, to recover the original T from the extrinsic matrix,
     we must left-multiply the extrinsic matrix by R^-1. This is OK because we know that
@@ -81,7 +83,8 @@ def plot_camera(ax: Axes3D, extrinsic, intrinsic=None):
     """
     for i in range(4):
         x, y, z, _ = points_in_world_frame[i] / points_in_world_frame[i, 3]
-        ax.plot([tx, x], [ty, y], [tz, z], color='black')
+        ax.plot([tx, x], [ty, y], [tz, z], color='black', label='Camera FOV' if not labeled_camera_fov_in_matplotlib else None)
+        labeled_camera_fov_in_matplotlib = True
     """
     Connect the corners.
     """
@@ -290,7 +293,7 @@ def main():
             xyz_right = (luminar_right_extrinsics @ np.concatenate((xyz_right, np.ones((len(xyz_right), 1))), axis=1).T).T
 
         lidar_xyz_points = np.concatenate((xyz_front, xyz_left, xyz_right), axis=0)
-        axes.scatter(*lidar_xyz_points.T[:3], s=1) # type: ignore
+        axes.scatter(*lidar_xyz_points.T[:3], s=1, label='LiDAR points') # type: ignore
 
     # Set axis labels
     axes.set_xlabel('X')
@@ -302,6 +305,7 @@ def main():
     axes.set_xlim(-size, size)
     axes.set_ylim(-size, size)
     axes.set_zlim(-size, size)
+    axes.legend()
 
     display_points = np.array([
         (15, -3, 1),

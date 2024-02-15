@@ -79,6 +79,7 @@ def test_camera_projection():
         plt.scatter(projected_points.T[0], projected_points.T[1], c=1/(Z+100), s=10, alpha=0.5, cmap='turbo')
         plt.xlim(0, 2064)
         plt.ylim(0, 960)
+        plt.title(camera + " + LiDAR")
         # plt.scatter(
         #     points_camera_plane_2d[:, 0],
         #     points_camera_plane_2d[:, 1],
