@@ -22,17 +22,34 @@ def test_camera_projection():
 
     index_lidar = (2339, 2079, 1948)
     index_camera = (585, 995, 595)
+    times = []
     with open(f"{base_path}/lidar/luminar_front_points/pcd_{index_lidar[0]}.pkl", "rb") as f:
-        xyz_front = pickle.load(f)[0]
+        data = pickle.load(f)
+        xyz_front = data[0]
+        xyz_time = data[-1]
+        times.append(xyz_time)
+        # plot time vs. each coordinate
+        # plt.scatter(xyz_time, xyz_front[:, 0], s=1, label='x')
+        # plt.scatter(xyz_time, xyz_front[:, 1], s=1, label='y')
+        # plt.scatter(xyz_time, xyz_front[:, 2], s=1, label='z')
+        # plt.legend()
+        # plt.show()
+        # print(min(xyz_time), max(xyz_time))
         xyz_front = (front_ext @ np.concatenate((xyz_front, np.ones((len(xyz_front), 1))), axis=1).T).T
 
     with open(f"{base_path}/lidar/luminar_left_points/pcd_{index_lidar[1]}.pkl", "rb") as f:
-        xyz_left = pickle.load(f)[0]
+        data = pickle.load(f)
+        xyz_left = data[0]
         xyz_left = (left_ext @ np.concatenate((xyz_left, np.ones((len(xyz_left), 1))), axis=1).T).T
+        times.append(data[-1])
 
     with open(f"{base_path}/lidar/luminar_right_points/pcd_{index_lidar[2]}.pkl", "rb") as f:
-        xyz_right = pickle.load(f)[0]
+        data = pickle.load(f)
+        xyz_right = data[0]
         xyz_right = (right_ext @ np.concatenate((xyz_right, np.ones((len(xyz_right), 1))), axis=1).T).T
+        times.append(data[-1])
+    
+    times = np.concatenate(times)
 
     xyz = np.concatenate((xyz_front, xyz_left, xyz_right), axis=0)
     xyz[:, 1] *= -1
@@ -46,8 +63,8 @@ def test_camera_projection():
 
     extrinsics = get_camera_extrinsics(use_yaml=False)
 
-    fig = plt.figure(figsize=(len(cameras_to_use) * 4, 4))
-    axes = [fig.add_subplot(1, 3, i + 1) for i in range(len(cameras_to_use))]
+    fig = plt.figure(figsize=(10, 12))
+    axes = [fig.add_subplot(1, len(cameras_to_use), i + 1) for i in range(len(cameras_to_use))]
 
     # Slider for Alpha
     def update_alpha(new_alpha):
@@ -63,8 +80,6 @@ def test_camera_projection():
         'pitch': 0,
         'roll': 0,
     }
-    # Assume this is fixed.
-    tweak_xyz = np.array([2.184, -0.171, 0.422])
     camera_to_tweak = 'front_right'
 
     def tweak(field, new_value):
@@ -81,7 +96,7 @@ def test_camera_projection():
         )
         plot()
 
-    alpha = 0.1
+    alpha = 0.2
     slider_axes = plt.axes([0.1, 0.01, 0.8, 0.02])
     slider = Slider(
         slider_axes,
@@ -123,7 +138,7 @@ def test_camera_projection():
             
             if redistort:
                 points_in_camera_frame = (extrinsics[camera] @ xyz[mask].T).T[:, :3]
-                cv2.projectPoints(
+                projected_points = cv2.projectPoints(
                     points_in_camera_frame,
                     np.zeros(3), # rvec
                     np.zeros(3), # tvec
@@ -150,7 +165,9 @@ def test_camera_projection():
             axis = axes[i]
             axis.imshow(plt.imread(f"{base_path}/camera/{camera}/image_{index_camera[i]}.png")[::-1, :, :])
             # if 0 < x < 2064 and 0 < y < 960:
-            axis.scatter(projected_points.T[0], projected_points.T[1], c=1/(Z+100), s=10, alpha=alpha, cmap='turbo')
+            c = 1/(Z+100)
+            # c = times[mask] # > 0.02
+            axis.scatter(projected_points.T[0], projected_points.T[1], c=c, s=10, alpha=alpha, cmap='turbo')
             axis.set_xlim(0, 2064)
             axis.set_ylim(0, 960)
             axis.set_title(camera + " + LiDAR")
@@ -172,7 +189,7 @@ def test_camera_projection():
 
     plot()
 
-    # plt.savefig("camera_projections.png")
+    # plt.tight_layout()
     plt.show()
 
 def test_camera_projection_opencv():
@@ -187,15 +204,18 @@ def test_camera_projection_opencv():
 
     index = 1
     with open(f"M-MULTI-SLOW-KAIST_lidar/luminar_front_points/{index}.pkl", "rb") as f:
-        xyz_front = pickle.load(f)[0]
+        data = pickle.load(f)
+        xyz_front = data[0]
         xyz_front = (front_ext @ np.concatenate((xyz_front, np.ones((len(xyz_front), 1))), axis=1).T).T
 
     with open(f"M-MULTI-SLOW-KAIST_lidar/luminar_left_points/{index}.pkl", "rb") as f:
-        xyz_left = pickle.load(f)[0]
+        data = pickle.load(f)
+        xyz_left = data[0]
         xyz_left = (left_ext @ np.concatenate((xyz_left, np.ones((len(xyz_left), 1))), axis=1).T).T
 
     with open(f"M-MULTI-SLOW-KAIST_lidar/luminar_right_points/{index}.pkl", "rb") as f:
-        xyz_right = pickle.load(f)[0]
+        data = pickle.load(f)
+        xyz_right = data[0]
         xyz_right = (right_ext @ np.concatenate((xyz_right, np.ones((len(xyz_right), 1))), axis=1).T).T
 
     xyz = np.concatenate((xyz_front, xyz_left, xyz_right), axis=0)
