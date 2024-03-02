@@ -95,7 +95,7 @@ def plot_camera(ax: 'Axes3D', extrinsic, intrinsic=None):
     z = [*points_in_world_frame[:, 2], points_in_world_frame[0, 2]]
     ax.plot(x, y, z, color='black')
 
-def create_camera_extrinsics(x, y, z, yaw):
+def create_camera_extrinsics(x, y, z, yaw, pitch=0, roll=0):
     """
     An extrinsic camera matrix follows the following format:
         [R t]
@@ -157,12 +157,50 @@ def create_camera_extrinsics(x, y, z, yaw):
     matrix transpose [making the rows -> columns and vice versa]), then multiplying by a point in "camera" coordinates outputs
     how the point would look in rear_axle_middle_ground coordinates.
     """
-    rot = np.array([
-        [-np.sin(yaw), np.cos(yaw), 0, 0],
+    # rot_yaw = np.array([
+    #     [-np.sin(yaw), np.cos(yaw), 0, 0],
+    #     [0, 0, 1, 0],
+    #     [np.cos(yaw), np.sin(yaw), 0, 0],
+    #     [0, 0, 0, 1],
+    # ])
+    # just changed it until it looked good lmfao
+    a = 2
+    b = 0
+    rot_yaw = np.array([
+        [1, 0, 0, 0],
+        [0, 1, 0, 0],
         [0, 0, 1, 0],
-        [np.cos(yaw), np.sin(yaw), 0, 0],
+        [0, 0, 0, 1],
+    ], dtype=np.float64)
+    # print(yaw)
+    rot_yaw[a, a] = np.cos(yaw)
+    rot_yaw[a, b] = np.sin(yaw)
+    rot_yaw[b, b] = np.cos(yaw)
+    rot_yaw[b, a] = -np.sin(yaw)
+    # print(rot_yaw)
+    # Rotate around the X axis
+    rot_pitch = np.array([
+        [1, 0, 0, 0],
+        [0, np.cos(pitch), -np.sin(pitch), 0],
+        [0, np.sin(pitch), np.cos(pitch), 0],
         [0, 0, 0, 1],
     ])
+    # Rotate around the Z axis
+    rot_roll = np.array([
+        [np.cos(roll), -np.sin(roll), 0, 0],
+        [np.sin(roll), np.cos(roll), 0, 0],
+        [0, 0, 1, 0],
+        [0, 0, 0, 1],
+    ])
+    # Correct for axes
+    correct_axes = np.array([
+        [0, 1, 0, 0],
+        [0, 0, 1, 0],
+        [1, 0, 0, 0],
+        [0, 0, 0, 1],
+    ])
+
+    rot = rot_yaw @ rot_pitch @ rot_roll @ correct_axes
     Rt = rot @ translation
     return Rt
 
@@ -173,21 +211,7 @@ def create_lidar_extrinsics(x, y, z, yaw):
         [0, 0, 1, z],
         [0, 0, 0, 1]
     ])
-    # rotation = np.array([
-    #     [np.cos(yaw), -np.sin(yaw), 0, 0],
-    #     [np.sin(yaw),  np.cos(yaw), 0, 0],
-    #     [          0,            0, 1, 0],
-    #     [          0,            0, 0, 1],
-    # ])
     rotation = np.array([
-        # [np.sin(yaw), np.cos(yaw), 0, 0],
-        # [0, 0, 1, 0],
-        # [np.cos(yaw), -np.sin(yaw), 0, 0],
-        # [0, 0, 0, 1],
-        # [0, 1, 0, 0],
-        # [0, 0, 1, 0],
-        # [1, 0, 0, 0],
-        # [0, 0, 0, 1],
         [np.cos(yaw), -np.sin(yaw), 0, 0],
         [np.sin(yaw),  np.cos(yaw), 0, 0],
         [          0,            0, 1, 0],

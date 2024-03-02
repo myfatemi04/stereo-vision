@@ -6,12 +6,14 @@ import cv2
 import json
 from matrices import create_lidar_extrinsics, get_camera_extrinsics, expand_intrinsics
 from matplotlib.widgets import Button, Slider
+from functools import partial
 
 # good timestamp: front_left_center#995
 
 # Now, we should be able to convert from world space to camera space.
 def test_camera_projection():
-    cameras_to_use = ['front_left', 'front_left_center', 'front_right']
+    # cameras_to_use = ['front_left', 'front_left_center', 'front_right']
+    cameras_to_use = ['front_right']
     base_path = 'bags/extracted/M-MULTI-SLOW-KAIST'
 
     front_ext = create_lidar_extrinsics(2.342, 0, 0.448, 0)
@@ -38,14 +40,14 @@ def test_camera_projection():
     with open("calibration/intrinsic_matrices.json", "r") as f:
         intrinsics = json.load(f)
         intrinsics = {k: np.array(v) for k, v in intrinsics.items()}
+    with open("calibration/intrinsic_models.json", "r") as f:
+        data = json.load(f)
+        distortion_coefficients = {k: np.array(v) for k, v in data['distortions'].items()}
 
     extrinsics = get_camera_extrinsics(use_yaml=False)
-    
-    undistort = False
 
     fig = plt.figure(figsize=(len(cameras_to_use) * 4, 4))
     axes = [fig.add_subplot(1, 3, i + 1) for i in range(len(cameras_to_use))]
-    slider_axes = plt.axes([0.1, 0.01, 0.8, 0.02])
 
     # Slider for Alpha
     def update_alpha(new_alpha):
@@ -53,7 +55,34 @@ def test_camera_projection():
         alpha = new_alpha
         plot()
 
-    alpha = 0.01
+    tweak_params = {
+        'x': 2.184,
+        'y': -0.171,
+        'z': 0.422,
+        'yaw': 0.9599310886,
+        'pitch': 0,
+        'roll': 0,
+    }
+    # Assume this is fixed.
+    tweak_xyz = np.array([2.184, -0.171, 0.422])
+    camera_to_tweak = 'front_right'
+
+    def tweak(field, new_value):
+        from matrices import create_camera_extrinsics
+
+        tweak_params[field] = new_value
+        extrinsics[camera_to_tweak] = create_camera_extrinsics(
+            tweak_params['x'],
+            tweak_params['y'],
+            tweak_params['z'],
+            tweak_params['yaw'],
+            tweak_params['pitch'],
+            tweak_params['roll'],
+        )
+        plot()
+
+    alpha = 0.1
+    slider_axes = plt.axes([0.1, 0.01, 0.8, 0.02])
     slider = Slider(
         slider_axes,
         label='Alpha',
@@ -63,38 +92,60 @@ def test_camera_projection():
     )
     slider.on_changed(update_alpha)
 
+    tweak_sliders = {}
+
+    for i, param_name in enumerate(tweak_params.keys()):
+        pitch_axes = plt.axes([0.1, 0.05 + 0.05 * (len(tweak_params) - i), 0.8, 0.02])
+        minmax = (-np.pi/2, np.pi/2) if param_name in ['pitch', 'roll', 'yaw'] else [-3, 3]
+        tweak_sliders[param_name] = Slider(
+            pitch_axes,
+            label=param_name.title(),
+            valmin=minmax[0],
+            valmax=minmax[1],
+            valinit=tweak_params[param_name],
+        )
+        tweak_sliders[param_name].on_changed(partial(tweak, param_name))
+
+    redistort = True
+
     def plot():
         for axis in axes:
             axis.clear()
         for i, camera in enumerate(cameras_to_use):
             intrinsics_expanded = expand_intrinsics(intrinsics[camera])
             camera_matrix = intrinsics_expanded @ extrinsics[camera]
-            projected_points = (camera_matrix @ np.array(xyz).T).T
+            projected_points = (camera_matrix @ xyz.T).T
             projected_points = (projected_points / projected_points[:, [3]])[:, :3]
             Z = projected_points[:, 2]
             mask = Z > 0
             Z = Z[mask]
             projected_points = (projected_points / projected_points[:, [2]])[mask, :2]
-
-            # points_camera_frame_3d = np.matmul(extrinsics[camera], points.T).T
-            # points_camera_plane_2d = np.matmul(expand_intrinsics(intrinsics[camera]), points_camera_frame_3d.T).T
-            # depths = np.linalg.norm(points_camera_frame_3d, axis=1)
-            # # filter out points that end up behind the camera
-            # mask = points_camera_plane_2d[:, -1] > 0
-            # points_camera_plane_2d = points_camera_plane_2d[mask]
-            # depths = depths[mask]
-            # points_camera_plane_2d = (points_camera_plane_2d / points_camera_plane_2d[:, [-1]])
-            # undistort
-            # if undistort:
-            #     D = distortion_coefficients[camera]
-            #     points_camera_plane_2d = cv2.undistortPoints(np.expand_dims(points_camera_plane_2d[:, :2], axis=0), np.eye(3), D).squeeze()
-            # else:
-            # points_camera_plane_2d = points_camera_plane_2d[:, :2]
-            # filter out points that are out of frame
-            # x, y = points_camera_plane_2d.T
-            # mask = (0 < x) & (x < 2064) & (0 < y) & (y < 960)
-            # points_camera_plane_2d = points_camera_plane_2d[mask]
-            # depths = depths[mask]
+            
+            if redistort:
+                points_in_camera_frame = (extrinsics[camera] @ xyz[mask].T).T[:, :3]
+                cv2.projectPoints(
+                    points_in_camera_frame,
+                    np.zeros(3), # rvec
+                    np.zeros(3), # tvec
+                    intrinsics[camera],
+                    distortion_coefficients[camera],
+                )[0]
+                # # during projection, distort the points.
+                # projected_points = (extrinsics[camera] @ xyz[mask].T).T
+                # projected_points = (projected_points / projected_points[:, [3]])[:, :2]
+                # translated_distortion_coefficients = np.array([
+                #     distortion_coefficients[camera][0],
+                #     distortion_coefficients[camera][1],
+                #     0,
+                #     0
+                # ])
+                # print(projected_points.shape)
+                # redistorted = cv2.fisheye.distortPoints(
+                #     projected_points[np.newaxis, ...],
+                #     intrinsics[camera],
+                #     translated_distortion_coefficients,
+                # )[0]
+                # projected_points = redistorted
 
             axis = axes[i]
             axis.imshow(plt.imread(f"{base_path}/camera/{camera}/image_{index_camera[i]}.png")[::-1, :, :])
