@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import cv2
 import json
 from matrices import create_lidar_extrinsics, get_camera_extrinsics, expand_intrinsics
+from matplotlib.widgets import Button, Slider
 
 # good timestamp: front_left_center#995
 
@@ -42,59 +43,83 @@ def test_camera_projection():
     
     undistort = False
 
-    plt.figure(figsize=(len(cameras_to_use) * 4, 4))
-    for i, camera in enumerate(cameras_to_use):
-        intrinsics_expanded = expand_intrinsics(intrinsics[camera])
-        camera_matrix = intrinsics_expanded @ extrinsics[camera]
-        projected_points = (camera_matrix @ np.array(xyz).T).T
-        projected_points = (projected_points / projected_points[:, [3]])[:, :3]
-        Z = projected_points[:, 2]
-        mask = Z > 0
-        Z = Z[mask]
-        projected_points = (projected_points / projected_points[:, [2]])[mask, :2]
+    fig = plt.figure(figsize=(len(cameras_to_use) * 4, 4))
+    axes = [fig.add_subplot(1, 3, i + 1) for i in range(len(cameras_to_use))]
+    slider_axes = plt.axes([0.1, 0.01, 0.8, 0.02])
 
-        # points_camera_frame_3d = np.matmul(extrinsics[camera], points.T).T
-        # points_camera_plane_2d = np.matmul(expand_intrinsics(intrinsics[camera]), points_camera_frame_3d.T).T
-        # depths = np.linalg.norm(points_camera_frame_3d, axis=1)
-        # # filter out points that end up behind the camera
-        # mask = points_camera_plane_2d[:, -1] > 0
-        # points_camera_plane_2d = points_camera_plane_2d[mask]
-        # depths = depths[mask]
-        # points_camera_plane_2d = (points_camera_plane_2d / points_camera_plane_2d[:, [-1]])
-        # undistort
-        # if undistort:
-        #     D = distortion_coefficients[camera]
-        #     points_camera_plane_2d = cv2.undistortPoints(np.expand_dims(points_camera_plane_2d[:, :2], axis=0), np.eye(3), D).squeeze()
-        # else:
-        # points_camera_plane_2d = points_camera_plane_2d[:, :2]
-        # filter out points that are out of frame
-        # x, y = points_camera_plane_2d.T
-        # mask = (0 < x) & (x < 2064) & (0 < y) & (y < 960)
-        # points_camera_plane_2d = points_camera_plane_2d[mask]
-        # depths = depths[mask]
+    # Slider for Alpha
+    def update_alpha(new_alpha):
+        nonlocal alpha
+        alpha = new_alpha
+        plot()
 
-        plt.subplot(2, 3, i + 1)
-        plt.imshow(plt.imread(f"{base_path}/camera/{camera}/image_{index_camera[i]}.png")[::-1, :, :])
-        # if 0 < x < 2064 and 0 < y < 960:
-        plt.scatter(projected_points.T[0], projected_points.T[1], c=1/(Z+100), s=10, alpha=0.5, cmap='turbo')
-        plt.xlim(0, 2064)
-        plt.ylim(0, 960)
-        plt.title(camera + " + LiDAR")
-        # plt.scatter(
-        #     points_camera_plane_2d[:, 0],
-        #     points_camera_plane_2d[:, 1],
-        #     c=-1/depths,
-        #     s=1,
-        #     cmap='jet',
-        #     alpha=0.5,
-        # )
-        plt.axis('off')
-        if i == len(cameras_to_use) - 1:
-            plt.colorbar()
-        plt.subplot(2, 3, i + 4)
-        plt.title(camera)
-        plt.imshow(plt.imread(f"{base_path}/camera/{camera}/image_{index_camera[i]}.png"))
-        plt.axis('off')
+    alpha = 0.01
+    slider = Slider(
+        slider_axes,
+        label='Alpha',
+        valmin=0.0,
+        valmax=1.0,
+        valinit=alpha,
+    )
+    slider.on_changed(update_alpha)
+
+    def plot():
+        for axis in axes:
+            axis.clear()
+        for i, camera in enumerate(cameras_to_use):
+            intrinsics_expanded = expand_intrinsics(intrinsics[camera])
+            camera_matrix = intrinsics_expanded @ extrinsics[camera]
+            projected_points = (camera_matrix @ np.array(xyz).T).T
+            projected_points = (projected_points / projected_points[:, [3]])[:, :3]
+            Z = projected_points[:, 2]
+            mask = Z > 0
+            Z = Z[mask]
+            projected_points = (projected_points / projected_points[:, [2]])[mask, :2]
+
+            # points_camera_frame_3d = np.matmul(extrinsics[camera], points.T).T
+            # points_camera_plane_2d = np.matmul(expand_intrinsics(intrinsics[camera]), points_camera_frame_3d.T).T
+            # depths = np.linalg.norm(points_camera_frame_3d, axis=1)
+            # # filter out points that end up behind the camera
+            # mask = points_camera_plane_2d[:, -1] > 0
+            # points_camera_plane_2d = points_camera_plane_2d[mask]
+            # depths = depths[mask]
+            # points_camera_plane_2d = (points_camera_plane_2d / points_camera_plane_2d[:, [-1]])
+            # undistort
+            # if undistort:
+            #     D = distortion_coefficients[camera]
+            #     points_camera_plane_2d = cv2.undistortPoints(np.expand_dims(points_camera_plane_2d[:, :2], axis=0), np.eye(3), D).squeeze()
+            # else:
+            # points_camera_plane_2d = points_camera_plane_2d[:, :2]
+            # filter out points that are out of frame
+            # x, y = points_camera_plane_2d.T
+            # mask = (0 < x) & (x < 2064) & (0 < y) & (y < 960)
+            # points_camera_plane_2d = points_camera_plane_2d[mask]
+            # depths = depths[mask]
+
+            axis = axes[i]
+            axis.imshow(plt.imread(f"{base_path}/camera/{camera}/image_{index_camera[i]}.png")[::-1, :, :])
+            # if 0 < x < 2064 and 0 < y < 960:
+            axis.scatter(projected_points.T[0], projected_points.T[1], c=1/(Z+100), s=10, alpha=alpha, cmap='turbo')
+            axis.set_xlim(0, 2064)
+            axis.set_ylim(0, 960)
+            axis.set_title(camera + " + LiDAR")
+            # plt.scatter(
+            #     points_camera_plane_2d[:, 0],
+            #     points_camera_plane_2d[:, 1],
+            #     c=-1/depths,
+            #     s=1,
+            #     cmap='jet',
+            #     alpha=0.5,
+            # )
+            axis.axis('off')
+            # if i == len(cameras_to_use) - 1:
+            #     axis.colorbar()
+            # axis.subplot(2, 3, i + 4)
+            # axis.title(camera)
+            # axis.imshow(plt.imread(f"{base_path}/camera/{camera}/image_{index_camera[i]}.png"))
+            # axis.axis('off')
+
+    plot()
 
     # plt.savefig("camera_projections.png")
     plt.show()
