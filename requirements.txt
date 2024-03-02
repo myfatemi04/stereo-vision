@@ -7,4 +7,4 @@ torch
 ipykernel
 # git+https://github.com/IDEA-Research/GroundingDINO
 huggingface-hub
-
+matplotlib

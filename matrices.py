@@ -3,14 +3,16 @@ import pickle
 import matplotlib.pyplot as plt
 import numpy as np
 import yaml
-# from mpl_toolkits.mplot3d import Axes3D
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from mpl_toolkits.mplot3d import Axes3D
 import json
 
 # Color scheme (X, Y, Z) -> (R, G, B)
 AXIS_COLORS = [(1, 0, 0), (0, 1, 0), (0, 0, 1)]
 labeled_camera_fov_in_matplotlib = False
 
-def plot_camera(ax: Axes3D, extrinsic, intrinsic=None):
+def plot_camera(ax: 'Axes3D', extrinsic, intrinsic=None):
     global labeled_camera_fov_in_matplotlib
     """
     Note that we did R @ T. Thus, to recover the original T from the extrinsic matrix,
@@ -224,12 +226,13 @@ def get_camera_extrinsics(use_yaml=False):
         camera_names = ['front_left', 'front_right', 'rear_left', 'rear_right', 'front_left_center', 'front_right_center']
 
         for camera in camera_names:
-            with open(f"extrinsics/{camera}.yaml", "r") as f:
+            with open(f"calibration/extrinsics/{camera}.yaml", "r") as f:
                 data = yaml.load(f, yaml.BaseLoader)
                 R = np.array(data['R']['data']).reshape(3, 3)
                 t = np.array(data['T']['data']).reshape(3, 1)
                 Rt = np.concatenate((R, t), axis=1).astype(np.float64)
-                extrinsics[camera] = Rt # invert_extrinsics(Rt)
+                Rt2 = np.concatenate((Rt, np.array([[0, 0, 0, 1]])), axis=0)
+                extrinsics[camera] = Rt2 # invert_extrinsics(Rt)
     else:
         # These are from the URDF file in RACECAR
         extrinsics = {
@@ -259,12 +262,12 @@ def main():
         intrinsics = json.load(f)
         intrinsics = {k: np.array(v) for k, v in intrinsics.items()}
 
-    extrinsics = get_camera_extrinsics()
+    extrinsics = get_camera_extrinsics(use_yaml=True)
 
     # Create a 3D plot
     fig = plt.figure()
     num_columns = 4
-    axes: Axes3D = fig.add_subplot(1, num_columns, 1, projection='3d') # type: ignore
+    axes: 'Axes3D' = fig.add_subplot(1, num_columns, 1, projection='3d') # type: ignore
 
     # Plot each camera
     for camera in extrinsics.keys():
