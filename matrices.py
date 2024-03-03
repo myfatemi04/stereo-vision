@@ -200,7 +200,8 @@ def create_camera_extrinsics(x, y, z, yaw, pitch=0, roll=0):
         [0, 0, 0, 1],
     ])
 
-    rot = rot_yaw @ rot_pitch @ rot_roll @ correct_axes
+    # rot = rot_yaw @ rot_pitch @ rot_roll @ correct_axes
+    rot = rot_roll @ rot_pitch @ rot_yaw @ correct_axes
     Rt = rot @ translation
     return Rt
 

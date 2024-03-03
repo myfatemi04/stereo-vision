@@ -12,22 +12,29 @@ from functools import partial
 
 # Now, we should be able to convert from world space to camera space.
 def test_camera_projection():
-    # cameras_to_use = ['front_left', 'front_left_center', 'front_right']
-    cameras_to_use = ['front_right']
     base_path = 'bags/extracted/M-MULTI-SLOW-KAIST'
 
     front_ext = create_lidar_extrinsics(2.342, 0, 0.448, 0)
     left_ext = create_lidar_extrinsics(1.549, 0.267, 0.543, 2.0943951024)
     right_ext = create_lidar_extrinsics(1.549, -0.267, 0.543, -2.0943951024)
 
-    index_lidar = (2339, 2079, 1948)
-    index_camera = (585, 995, 595)
+    # index_lidar = (2339, 2079, 1948)
+    # index_camera = (585, 995, 595)
+    index_lidar = (5759, 5137, 4785)
+    index_camera = (1501, 2521, 1851)
+
+    cameras_to_use = ['front_left', 'front_left_center', 'front_right']
+    # cameras_to_use = cameras_to_use[2:3]
+    # index_camera = index_camera[2:3]
+
     times = []
+    intensities = []
     with open(f"{base_path}/lidar/luminar_front_points/pcd_{index_lidar[0]}.pkl", "rb") as f:
         data = pickle.load(f)
         xyz_front = data[0]
         xyz_time = data[-1]
         times.append(xyz_time)
+        intensities.append(data[1])
         # plot time vs. each coordinate
         # plt.scatter(xyz_time, xyz_front[:, 0], s=1, label='x')
         # plt.scatter(xyz_time, xyz_front[:, 1], s=1, label='y')
@@ -41,18 +48,28 @@ def test_camera_projection():
         data = pickle.load(f)
         xyz_left = data[0]
         xyz_left = (left_ext @ np.concatenate((xyz_left, np.ones((len(xyz_left), 1))), axis=1).T).T
+        intensities.append(data[1])
         times.append(data[-1])
 
     with open(f"{base_path}/lidar/luminar_right_points/pcd_{index_lidar[2]}.pkl", "rb") as f:
         data = pickle.load(f)
         xyz_right = data[0]
         xyz_right = (right_ext @ np.concatenate((xyz_right, np.ones((len(xyz_right), 1))), axis=1).T).T
+        intensities.append(data[1])
         times.append(data[-1])
     
+    intensities = np.concatenate(intensities)
     times = np.concatenate(times)
 
+    xyz = np.concatenate((xyz_front, xyz_right), axis=0)
     xyz = np.concatenate((xyz_front, xyz_left, xyz_right), axis=0)
     xyz[:, 1] *= -1
+
+    # visualize xyz in open3d
+    # import open3d as o3d
+    # pcd = o3d.geometry.PointCloud()
+    # pcd.points = o3d.utility.Vector3dVector(xyz[:, :3])
+    # o3d.visualization.draw_geometries([pcd])
 
     with open("calibration/intrinsic_matrices.json", "r") as f:
         intrinsics = json.load(f)
@@ -79,6 +96,8 @@ def test_camera_projection():
         'yaw': 0.9599310886,
         'pitch': 0,
         'roll': 0,
+        'k1': distortion_coefficients['front_right'][0],
+        # 'fscale': 1.0,
     }
     camera_to_tweak = 'front_right'
 
@@ -94,6 +113,9 @@ def test_camera_projection():
             tweak_params['pitch'],
             tweak_params['roll'],
         )
+        distortion_coefficients[camera_to_tweak] = np.array([tweak_params['k1'], 0, 0, 0])
+        # intrinsics[camera_to_tweak][0, 0] = 1000 * tweak_params['fscale']
+        # intrinsics[camera_to_tweak][1, 1] = 1000 * tweak_params['fscale']
         plot()
 
     alpha = 0.2
@@ -111,7 +133,12 @@ def test_camera_projection():
 
     for i, param_name in enumerate(tweak_params.keys()):
         pitch_axes = plt.axes([0.1, 0.05 + 0.05 * (len(tweak_params) - i), 0.8, 0.02])
-        minmax = (-np.pi/2, np.pi/2) if param_name in ['pitch', 'roll', 'yaw'] else [-3, 3]
+        if param_name in ['x', 'y', 'z']:
+            minmax = (-3, 3)
+        elif param_name in ['yaw', 'pitch', 'roll']:
+            minmax = (-np.pi, np.pi)
+        elif param_name in ['fscale']:
+            minmax = (0.1, 2)
         tweak_sliders[param_name] = Slider(
             pitch_axes,
             label=param_name.title(),
@@ -132,9 +159,14 @@ def test_camera_projection():
             projected_points = (camera_matrix @ xyz.T).T
             projected_points = (projected_points / projected_points[:, [3]])[:, :3]
             Z = projected_points[:, 2]
-            mask = Z > 0
+            projected_points = (projected_points / projected_points[:, [2]])
+            mask = (
+                (Z > 0) & \
+                (0 <= projected_points[:, 0]) & (projected_points[:, 0] < 2064) & \
+                (0 <= projected_points[:, 1]) & (projected_points[:, 1] < 960) \
+            )
             Z = Z[mask]
-            projected_points = (projected_points / projected_points[:, [2]])[mask, :2]
+            projected_points = projected_points[mask, :2]
             
             if redistort:
                 points_in_camera_frame = (extrinsics[camera] @ xyz[mask].T).T[:, :3]
@@ -163,9 +195,10 @@ def test_camera_projection():
                 # projected_points = redistorted
 
             axis = axes[i]
-            axis.imshow(plt.imread(f"{base_path}/camera/{camera}/image_{index_camera[i]}.png")[::-1, :, :])
-            # if 0 < x < 2064 and 0 < y < 960:
+            image = plt.imread(f"{base_path}/camera/{camera}/image_{index_camera[i]}.png")[::-1, :, :]
+            axis.imshow(image)            # if 0 < x < 2064 and 0 < y < 960:
             c = 1/(Z+100)
+            # c = intensities[mask]
             # c = times[mask] # > 0.02
             axis.scatter(projected_points.T[0], projected_points.T[1], c=c, s=10, alpha=alpha, cmap='turbo')
             axis.set_xlim(0, 2064)
@@ -179,7 +212,7 @@ def test_camera_projection():
             #     cmap='jet',
             #     alpha=0.5,
             # )
-            axis.axis('off')
+            # axis.axis('off')
             # if i == len(cameras_to_use) - 1:
             #     axis.colorbar()
             # axis.subplot(2, 3, i + 4)
@@ -188,6 +221,7 @@ def test_camera_projection():
             # axis.axis('off')
 
     plot()
+    tweak('dummy', 0)
 
     # plt.tight_layout()
     plt.show()
