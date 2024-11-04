@@ -1,132 +1,164 @@
-import pickle
-from rosbags.rosbag2 import Reader
-from rosbags.serde import deserialize_cdr
-import tqdm
-import numpy as np
-import cv2
 import json
 import os
+import pickle
+from collections import defaultdict
 
-def extract_images(bag_dir, out_dir):
-    camera_topics = []
-    camera_conns = []
-    total_msg_count = 0
-    with Reader(bag_dir) as reader:
-        for connection in reader.connections:
-            if connection.msgtype == 'sensor_msgs/msg/CompressedImage':
-                camera_topics.append(connection.topic)
-                camera_conns.append(connection)
-                total_msg_count += connection.msgcount
-                
-        print(f"Identified {len(camera_topics)} camera topics.")
+import click
+import cv2
+import numpy as np
+import tqdm
+from rosbags.interfaces import Connection
+from rosbags.rosbag2 import Reader
+from rosbags.serde import deserialize_cdr
 
-        counters = {t: 0 for t in camera_topics}
-        timestamps = {t: [] for t in camera_topics}
 
-        # Extract subfolder names
-        print("Output map:")
-        outdirs = {}
-        shortnames = {}
-        for t in camera_topics:
-            end = t.find("/image")
-            start = t.rfind("/", 0, end) + 1
-            shortnames[t] = t[start:end]
-            outdirs[t] = os.path.join(out_dir, shortnames[t])
-            
-            print(t, "=>", outdirs[t])
+def identify_topics(reader: Reader):
+    topics_by_type: dict[str, list[Connection]] = {}
+    for connection in reader.connections:
+        if connection.msgtype not in topics_by_type:
+            topics_by_type[connection.msgtype] = []
+        topics_by_type[connection.msgtype].append(connection)
+    return topics_by_type
 
-            if not os.path.exists(outdirs[t]):
-                os.makedirs(outdirs[t])
-        
-        with tqdm.tqdm(desc='Reading images.', total=total_msg_count) as pbar:
-            for connection, timestamp, rawdata in reader.messages(camera_conns):
-                # Check if the message topic matches.
-                # msgtype should be sensor_msgs/msg/CompressedImage
-                if (t := connection.topic) in camera_topics:
-                    counters[t] += 1
-                    msg = deserialize_cdr(rawdata, connection.msgtype)
-                    np_arr = np.fromstring(msg.data, np.uint8)
-                    image_np = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-                    image_np = cv2.cvtColor(image_np, cv2.COLOR_BGR2RGB)
-                    timestamps[t].append(timestamp)
-                    path = f'{outdirs[t]}/image_{counters[t]}.png'
-                    if not os.path.exists(path):
-                        cv2.imwrite(path, image_np)
 
-                    pbar.update(1)
+def infer_camera_name(camera_topic_name: str):
+    end = camera_topic_name.find("/image")
+    start = camera_topic_name.rfind("/", 0, end) + 1
+    return camera_topic_name[start:end]
 
-        with open(f'{out_dir}/timestamps.json', 'w') as f:
-            json.dump({shortnames[k]: v for k, v in timestamps.items()}, f)
+
+def infer_lidar_name(lidar_topic_name: str):
+    start = lidar_topic_name.find("/", 2) + 1
+    return lidar_topic_name[start:]
+
+
+def compressed_image_message_to_numpy(rawdata: bytes, connection: Connection):
+    msg = deserialize_cdr(rawdata, connection.msgtype)
+    data: bytes = msg.data  # type: ignore
+    np_arr = np.fromstring(data, dtype=np.uint8)  # type: ignore
+    image_np = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    image_np = cv2.cvtColor(image_np, cv2.COLOR_BGR2RGB)
+    return image_np
+
 
 def ros_lidar_to_numpy(parsed_message):
-    points = np.frombuffer(parsed_message.data, np.float32).reshape((parsed_message.height, parsed_message.width, 6))
+    points = np.frombuffer(parsed_message.data, np.float32).reshape(
+        (parsed_message.height, parsed_message.width, 6)
+    )
     point_xyzs = points[:, :, :3].reshape((-1, 3))
     point_intensities = points[:, :, 3].reshape((-1))
     point_rings = points[:, :, 4].reshape((-1))
     point_times = points[:, :, 5].reshape((-1))
     return (point_xyzs, point_intensities, point_rings, point_times)
 
-def extract_lidar(bag_dir, out_dir):
-    lidar_topics = []
-    lidar_conns = []
-    total_msg_count = 0
+
+@click.command()
+@click.option("--bag_dir", required=True, type=str, help="Path to the bag file.")
+@click.option(
+    "--out_dir", required=True, type=str, help="Path to store extracted content to."
+)
+@click.option(
+    "--include_camera",
+    is_flag=True,
+    help="Whether to extract camera images from the bag file.",
+)
+@click.option(
+    "--include_lidar",
+    is_flag=True,
+    help="Whether to extract lidar point clouds from the bag file.",
+)
+@click.option(
+    "--overwrite_existing",
+    is_flag=True,
+    help="Whether to overwrite existing content in the output directory. If not, then the extraction will be skipped for that file.",
+)
+def extract(
+    bag_dir: str,
+    out_dir: str,
+    include_camera=False,
+    include_lidar=False,
+    overwrite_existing=False,
+):
+    assert (
+        include_camera or include_lidar
+    ), "At least one of camera or lidar must be included for extraction."
+
+    timestamp_by_topic = defaultdict(list)
+    counter_by_topic = defaultdict(int)
+    short_names: dict[str, str] = {}
+    total_messages = 0
     with Reader(bag_dir) as reader:
-        for connection in reader.connections:
-            if connection.msgtype == 'sensor_msgs/msg/PointCloud2':
-                lidar_topics.append(connection.topic)
-                lidar_conns.append(connection)
-                total_msg_count += connection.msgcount
-                
-        print(f"Identified {len(lidar_topics)} LiDAR topics.")
+        topics = identify_topics(reader)
+        camera_connections = topics.get("sensor_msgs/msg/CompressedImage", [])
+        lidar_connections = topics.get("sensor_msgs/msg/PointCloud2", [])
+        all_connections = (camera_connections if include_camera else []) + (
+            lidar_connections if include_lidar else []
+        )
+        total_messages = sum([connection.msgcount for connection in all_connections])
 
-        counters = {t: 0 for t in lidar_topics}
-        timestamps = {t: [] for t in lidar_topics}
+        for connection in all_connections:
+            short_names[connection.topic] = (
+                infer_camera_name(connection.topic)
+                if connection.msgtype == "sensor_msgs/msg/CompressedImage"
+                else infer_lidar_name(connection.topic)
+            )
 
-        # Extract subfolder names
-        print("Output map:")
-        outdirs = {}
-        shortnames = {}
-        for t in lidar_topics:
-            start = t.find("/", 2) + 1
-            shortnames[t] = t[start:]
-            outdirs[t] = os.path.join(out_dir, shortnames[t])
-            
-            print(t, "=>", outdirs[t])
+        with tqdm.tqdm(desc="Extracting data.", total=total_messages) as pbar:
+            for connection, timestamp, rawdata in reader.messages(all_connections):
+                IS_CAMERA = connection.msgtype == "sensor_msgs/msg/CompressedImage"
 
-            if not os.path.exists(outdirs[t]):
-                os.makedirs(outdirs[t])
-            
-        # Iterate over messages
-        with tqdm.tqdm(desc='Reading LiDAR point clouds', total=total_msg_count) as pbar:
-            for connection, timestamp, rawdata in reader.messages(lidar_conns):
-                # Check if the message topic matches
-                # msgtype should be sensor_msgs/msg/PointCloud2
-                if (t := connection.topic) in lidar_topics:
-                    counters[t] += 1
-                    msg = deserialize_cdr(rawdata, connection.msgtype)
-                    data = ros_lidar_to_numpy(msg)
-                    path = f'{outdirs[connection.topic]}/pcd_{counters[t]}.pkl'
-                    if not os.path.exists(path):
-                        with open(path, 'wb') as f:
+                # Save content.
+                if IS_CAMERA:
+                    topic_dir = os.path.join(
+                        out_dir, "camera", infer_camera_name(connection.topic)
+                    )
+                    output_path = os.path.join(
+                        topic_dir,
+                        f"image_{counter_by_topic[connection.topic]:05d}.png",
+                    )
+                    if not os.path.exists(topic_dir):
+                        os.makedirs(topic_dir)
+
+                    if not os.path.exists(output_path) or overwrite_existing:
+                        cv2.imwrite(
+                            output_path,
+                            compressed_image_message_to_numpy(rawdata, connection),
+                        )
+                else:
+                    topic_dir = os.path.join(
+                        out_dir, "lidar", infer_lidar_name(connection.topic)
+                    )
+                    output_path = os.path.join(
+                        topic_dir,
+                        f"pointcloud_{counter_by_topic[connection.topic]:05d}.pkl",
+                    )
+                    if not os.path.exists(topic_dir):
+                        os.makedirs(topic_dir)
+
+                    if not os.path.exists(output_path) or overwrite_existing:
+                        data = ros_lidar_to_numpy(
+                            deserialize_cdr(rawdata, connection.msgtype)
+                        )
+                        with open(output_path, "wb") as f:
                             pickle.dump(data, f)
-                    pbar.update(1)
-                    timestamps[t].append(timestamp)
-        
-        with open(f'{out_dir}/timestamps.json', 'w') as f:
-            json.dump({shortnames[k]: v for k, v in timestamps.items()}, f)
 
-'''
-Topic: /vehicle_8/camera/front_left/camera_info | Type: sensor_msgs/msg/CameraInfo | Count: 16363 | Serialization Format: cdr
-Topic: /vehicle_8/camera/front_left/image/compressed | Type: sensor_msgs/msg/CompressedImage | Count: 3062 | Serialization Format: cdr
-Topic: /vehicle_8/camera/front_left_center/camera_info | Type: sensor_msgs/msg/CameraInfo | Count: 16503 | Serialization Format: cdr
-Topic: /vehicle_8/camera/front_left_center/image/compressed | Type: sensor_msgs/msg/CompressedImage | Count: 5092 | Serialization Format: cdr
-Topic: /vehicle_8/camera/front_right/camera_info | Type: sensor_msgs/msg/CameraInfo | Count: 16352 | Serialization Format: cdr
-Topic: /vehicle_8/camera/front_right/image/compressed | Type: sensor_msgs/msg/CompressedImage | Count: 4250 | Serialization Format: cdr
-Topic: /vehicle_8/camera/rear_left/camera_info | Type: sensor_msgs/msg/CameraInfo | Count: 16324 | Serialization Format: cdr
-Topic: /vehicle_8/camera/rear_left/image/compressed | Type: sensor_msgs/msg/CompressedImage | Count: 4803 | Serialization Format: cdr
-Topic: /vehicle_8/camera/rear_right/camera_info | Type: sensor_msgs/msg/CameraInfo | Count: 16309 | Serialization Format: cdr
-Topic: /vehicle_8/camera/rear_right/image/compressed
-'''
+                timestamp_by_topic[connection.topic].append(timestamp)
+                counter_by_topic[connection.topic] += 1
+                pbar.update(1)
 
-extract_images('bags/ros/M-MULTI-SLOW-KAIST', 'bags/extracted/M-MULTI-SLOW-KAIST/camera')
-extract_lidar('bags/ros/M-MULTI-SLOW-KAIST', 'bags/extracted/M-MULTI-SLOW-KAIST/lidar')
+        with open(f"{out_dir}/timestamps.json", "w") as f:
+            json.dump(
+                {
+                    short_names[topic]: timestamps
+                    for (topic, timestamps) in timestamp_by_topic
+                },
+                f,
+            )
+
+
+extract(
+    "bags/ros/M-MULTI-SLOW-KAIST",
+    "bags/extracted/M-MULTI-SLOW-KAIST",
+    include_camera=True,
+    include_lidar=True,
+)
