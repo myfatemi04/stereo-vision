@@ -2,10 +2,10 @@
 Usage: python detect_cars.py </path/to/images> <output_file>
 """
 
-import glob
-import pickle
-import sys
-from typing import Tuple
+import json
+import os
+
+import click
 
 # Grounding DINO
 import groundingdino.datasets.transforms as T
@@ -13,15 +13,26 @@ import PIL.Image
 import torch
 import tqdm
 from groundingdino.models import build_model
+from groundingdino.models.GroundingDINO.groundingdino import GroundingDINO
 from groundingdino.util.inference import predict
 from groundingdino.util.slconfig import SLConfig
 from groundingdino.util.utils import clean_state_dict
 from huggingface_hub import hf_hub_download
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+CHECKPOINT_REPO_ID = "ShilongLiu/GroundingDINO"
+CHECKPOINT_FILENAME = "groundingdino_swinb_cogcoor.pth"
+CHECKPOINT_CONFIG_FILENAME = "GroundingDINO_SwinB.cfg.py"
+INFERENCE_TRANSFORM = T.Compose(
+    [
+        # Selects a "random" size from the list [800,]
+        T.RandomResize([800], max_size=1333),
+        T.ToTensor(),
+        T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    ]
+)
 
 
-def load_model_hf(repo_id, filename, ckpt_config_filename, device):
+def load_model_hf(repo_id, filename, ckpt_config_filename, device) -> GroundingDINO:
     cache_config_file = hf_hub_download(repo_id=repo_id, filename=ckpt_config_filename)
 
     args = SLConfig.fromfile(cache_config_file)
@@ -36,63 +47,89 @@ def load_model_hf(repo_id, filename, ckpt_config_filename, device):
     return model
 
 
-transform = T.Compose(
-    [
-        # Selects a "random" size from the list [800,]
-        T.RandomResize([800], max_size=1333),
-        T.ToTensor(),
-        T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-    ]
-)
-
-DetectionResult = Tuple[torch.Tensor, torch.Tensor, list]
-
-
 # Infer on image folder
-def infer_image_folder(input_path: str, output_file: str):
-    # Use this command for evaluate the Grounding DINO model
-    # Or you can download the model by yourself
-    ckpt_repo_id = "ShilongLiu/GroundingDINO"
-    ckpt_filename = "groundingdino_swinb_cogcoor.pth"
-    ckpt_config_filename = "GroundingDINO_SwinB.cfg.py"
-
-    model = load_model_hf(ckpt_repo_id, ckpt_filename, ckpt_config_filename, device)
+@click.command()
+@click.option("--input_folder", "-i", required=True, type=str, help="Path to images.")
+@click.option(
+    "--output_folder",
+    "-o",
+    required=True,
+    type=str,
+    help="Folder to store resulting images in.",
+)
+@click.option(
+    "--text_prompt",
+    "-p",
+    default="racecar",
+    type=str,
+    help="Text prompt to use for grounding.",
+)
+@click.option(
+    "--box_threshold",
+    default=0.3,
+    type=float,
+    help="Bounding box confidence threshold for filtering detections.",
+)
+@click.option(
+    "--text_threshold",
+    default=0.25,
+    type=float,
+    help="Text confidence threshold for filtering detections.",
+)
+def detect_with_foundation_model(
+    input_folder: str,
+    output_folder: str,
+    text_prompt: str,
+    box_threshold: float,
+    text_threshold: float,
+):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = load_model_hf(
+        CHECKPOINT_REPO_ID,
+        CHECKPOINT_FILENAME,
+        CHECKPOINT_CONFIG_FILENAME,
+        device,
+    )
     model = model.to(device)
 
-    # Detection settings
-    TEXT_PROMPT = "car"
-    BOX_TRESHOLD = 0.3
-    TEXT_TRESHOLD = 0.25
+    os.makedirs(f"{output_folder}/yolo/labels")
+    os.makedirs(f"{output_folder}/raw_detection_results")
 
-    image_paths = sorted(
-        list(glob.glob(f"{input_path}/*.png")) + list(glob.glob(f"{input_path}/*.jpg"))
-    )
-    results = []
+    for filename in tqdm.tqdm(
+        sorted(os.listdir(input_folder)),
+        desc="Running inference with foundation model.",
+    ):
+        if not filename.endswith(".png") and not filename.endswith(".jpg"):
+            continue
 
-    for image_path in tqdm.tqdm(image_paths, desc="Detecting cars."):
+        image_id = filename.split(".")[0]
+        image_path = os.path.join(input_folder, filename)
         raw_image = PIL.Image.open(image_path).convert("RGB")
-        image, _ = transform(raw_image, None)
+        image, _ = INFERENCE_TRANSFORM(raw_image, None)
         boxes, logits, phrases = predict(
             model=model,
             image=image,
-            caption=TEXT_PROMPT,
-            box_threshold=BOX_TRESHOLD,
-            text_threshold=TEXT_TRESHOLD,
+            caption=text_prompt,
+            box_threshold=box_threshold,
+            text_threshold=text_threshold,
             device=device,
         )
-        results.append((boxes, logits, phrases))
 
-    with open(output_file, "wb") as f:
-        pickle.dump(results, f)
+        with open(f"{output_folder}/yolo/labels/{image_id}.txt", "w") as f:
+            for box in boxes:
+                center_x, center_y, width, height = box
+                f.write(f"0 {center_x} {center_y} {width} {height}\n")
 
-    print(f"Saved results to {output_file}.")
+        with open(f"{output_folder}/raw_detection_results/{image_id}.json", "w") as f:
+            json.dump(
+                {
+                    "boxes": boxes.tolist(),
+                    "logits": logits.tolist(),
+                    "phrases": phrases,
+                },
+                f,
+            )
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: python detect_cars.py </path/to/images> <output_file>")
-        exit(1)
-
-    input_path = sys.argv[1]
-    output_file = sys.argv[2]
-    infer_image_folder(input_path, output_file)
+    detect_with_foundation_model()
