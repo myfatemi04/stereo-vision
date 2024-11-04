@@ -156,9 +156,5 @@ def extract(
             )
 
 
-extract(
-    "bags/ros/M-MULTI-SLOW-KAIST",
-    "bags/extracted/M-MULTI-SLOW-KAIST",
-    include_camera=True,
-    include_lidar=True,
-)
+if __name__ == "__main__":
+    extract()
