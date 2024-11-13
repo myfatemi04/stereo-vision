@@ -1,6 +1,7 @@
 # Will store the dataset in COCO format.
 # Using a more powerful labeler with a bit of manual feedback.
 
+import json
 import logging
 import os
 import pickle
@@ -46,7 +47,7 @@ def calculate_iou(box1, box2):
     return intersection / union
 
 
-def convert_boxes(boxes: torch.Tensor):
+def cxcywh_to_x1y1x2y2(boxes: torch.Tensor):
     # (center x, center y, width, height) -> (x1, y1, x2, y2)
     cx, cy, w, h = boxes.unbind(-1)
     x1 = cx - 0.5 * w
@@ -58,7 +59,7 @@ def convert_boxes(boxes: torch.Tensor):
     return boxes
 
 
-def render_labels(image, boxes):
+def render_labels(image: np.ndarray, boxes: torch.Tensor):
     h, w, _ = image.shape
     image = image[:, :, ::-1]
 
@@ -89,12 +90,10 @@ def render_labels(image, boxes):
     plt.pause(0.02)
 
 
-def has_multiple_overlapping_boxes(boxes, iou_threshold=0.5):
+def has_overlapping_pair(boxes, iou_threshold=0.5):
     for i in range(len(boxes)):
         for j in range(i + 1, len(boxes)):
-            box1 = boxes[i]
-            box2 = boxes[j]
-            if calculate_iou(box1, box2) > iou_threshold:
+            if calculate_iou(boxes[i], boxes[j]) > iou_threshold:
                 return True
 
     return False
@@ -108,7 +107,7 @@ def track(box, reason):
     return {"tracked": True, "reason": reason, "box": box}
 
 
-def center(box):
+def x1y1x2y2_to_centered(box: torch.Tensor):
     return torch.stack(
         [(box[..., 0] + box[..., 2]) / 2, (box[..., 1] + box[..., 3]) / 2], dim=-1
     )
@@ -139,7 +138,9 @@ def get_judgement_for_boxes(
             if info["reason"] in ["human_rejection", "human_rejection_track"]:
                 # Check distance to that box.
                 rejection = info["box_rejections"][0]
-                distance = (center(rejection) - center(box)).norm()
+                distance = (
+                    x1y1x2y2_to_centered(rejection) - x1y1x2y2_to_centered(box)
+                ).norm()
                 if distance < distance_threshold:
                     return no_track("human_rejection_track", boxes)
 
@@ -149,8 +150,8 @@ def get_judgement_for_boxes(
         else:
             return no_track("human_rejection", boxes)
 
-    previous_center = center(previous_detection)
-    box_centers = center(boxes)
+    previous_center = x1y1x2y2_to_centered(previous_detection)
+    box_centers = x1y1x2y2_to_centered(boxes)
     distances = (box_centers - previous_center).norm(dim=-1)
     # Sort boxes in order of distance.
     best_box_indexes = torch.argsort(distances)
@@ -161,13 +162,15 @@ def get_judgement_for_boxes(
         return no_track("distance_rejection", boxes)
 
     # Check for multiple overlapping boxes.
-    if has_multiple_overlapping_boxes(boxes[distances <= distance_threshold]):
+    if has_overlapping_pair(boxes[distances <= distance_threshold]):
         return no_track("overlapping_boxes_rejection", boxes)
 
     return track(best_box, "distance_acceptance")
 
 
-def preliminary_box_filtering(boxes, forbidden_x, forbidden_y):
+def remove_boxes_containing_points(
+    boxes: torch.Tensor, X: torch.Tensor, Y: torch.Tensor
+):
     # Remove ``boxes" that cover the entire screen, as well as boxes
     # with a terrible "aspect ratio".
     widths = boxes[:, 2] - boxes[:, 0]
@@ -175,65 +178,65 @@ def preliminary_box_filtering(boxes, forbidden_x, forbidden_y):
     boxes = boxes[((widths * heights) < 0.9) & (heights < widths)]
 
     # Remove boxes containing forbidden points.
-    boxes_unsqueezed = boxes.unsqueeze(-1).expand(-1, -1, len(forbidden_x))
-    contains_forbidden_x = (boxes_unsqueezed[:, 0] < forbidden_x) & (
-        forbidden_x < boxes_unsqueezed[:, 2]
-    )
-    contains_forbidden_y = (boxes_unsqueezed[:, 1] < forbidden_y) & (
-        forbidden_y < boxes_unsqueezed[:, 3]
-    )
+    boxes_unsqueezed = boxes.unsqueeze(-1).expand(-1, -1, len(X))
+    contains_forbidden_x = (boxes_unsqueezed[:, 0] < X) & (X < boxes_unsqueezed[:, 2])
+    contains_forbidden_y = (boxes_unsqueezed[:, 1] < Y) & (Y < boxes_unsqueezed[:, 3])
     contains_forbidden = torch.any(contains_forbidden_x & contains_forbidden_y, dim=-1)
     boxes = boxes[~contains_forbidden]
 
     return boxes
 
 
+IMAGE_SIZE = (2064, 960)
+FORBIDDEN_POINTS = {"front_left_center": [(2000, 900)]}
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
-    CAMERA_NAME = "front_left_center"
-    BAG_FOLDER = os.path.expanduser("~/bags/extracted/M-MULTI-SLOW-KAIST")
-    IMAGE_FOLDER = os.path.join(BAG_FOLDER, "camera", CAMERA_NAME)
-    LABELS_PATH = os.path.join(BAG_FOLDER, "camera-labels", CAMERA_NAME + "_results.pt")
-
-    raw_labels = torch.load(LABELS_PATH)
-    logging.info("Loaded results from %s", LABELS_PATH)
+    IMAGES_FOLDER = "images/M-MULTI-SLOW-KAIST/rear_right"
+    RAW_LABELS_FOLDER = "labels/rear_right/raw_detection_results"
 
     # Define a set of points that are on *our* car.
     # If the bounding box contains these points, we
     # filter this box out as "not an opponent".
-    # Stores as paralle tensors.
+    # Stores as parallel tensors.
     forbidden_points = [(2000, 900)]
-    forbidden_x = torch.tensor([x for (x, _) in forbidden_points]) / 2064
-    forbidden_y = torch.tensor([y for (_, y) in forbidden_points]) / 960
+    forbidden_x = torch.tensor([x for (x, _) in forbidden_points]) / IMAGE_SIZE[0]
+    forbidden_y = torch.tensor([y for (_, y) in forbidden_points]) / IMAGE_SIZE[1]
 
     torch.random.manual_seed(42)
 
     most_recent_good_box = None
-    CONFIDENCE_DISTANCE = 50
+    confidence_distance = 50
     lookback_distance = 5
     steps_since_good_detection = 0
 
     plt.figure(figsize=(8, 6))
 
     history = []
+    n_images = len(os.listdir(IMAGES_FOLDER))
 
     try:
-        for i, (boxes, confidences, labels) in enumerate(raw_labels):
-            frame = PIL.Image.open(os.path.join(IMAGE_FOLDER, f"image_{i + 1}.png"))
-            frame = np.array(frame)
+        for i in range(n_images):
+            frame = np.array(
+                PIL.Image.open(os.path.join(IMAGES_FOLDER, f"rear_right_{i + 1}.jpeg"))
+            )
+            with open(os.path.join(RAW_LABELS_FOLDER, f"rear_right_{i + 1}.json")) as f:
+                label = json.load(f)
+
+            boxes = torch.tensor(label["boxes"])
+            logits = torch.tensor(label["logits"])
 
             logging.info("frame %d.", i)
 
             print("Original boxes:", boxes)
 
-            ### Preliminary filtering. ###
-            # NOTE: Boxes use proportional coordinates
-            boxes = convert_boxes(boxes)
-            boxes = preliminary_box_filtering(boxes, forbidden_x, forbidden_y)
+            # boxes = cxcywh_to_x1y1x2y2(boxes)
+            boxes = remove_boxes_containing_points(boxes, forbidden_x, forbidden_y)
 
             result = get_judgement_for_boxes(
-                frame, boxes, most_recent_good_box, history, CONFIDENCE_DISTANCE
+                frame, boxes, most_recent_good_box, history, confidence_distance
             )
             print(result)
 
@@ -248,8 +251,8 @@ def main():
 
             history.append(result)
             render_labels(frame, boxes)
-    except:
-        pass
+    except KeyboardInterrupt:
+        logging.info("Interrupted.")
 
     with open("log.pkl", "wb") as f:
         pickle.dump(history, f)

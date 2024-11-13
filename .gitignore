@@ -13,3 +13,5 @@ yolov5
 M-MULTI-SLOW-KAIST_lidar/
 bags
 **/__pycache__
+images
+labels

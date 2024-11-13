@@ -92,17 +92,24 @@ def detect_with_foundation_model(
     )
     model = model.to(device)
 
-    os.makedirs(f"{output_folder}/yolo/labels")
-    os.makedirs(f"{output_folder}/raw_detection_results")
+    try:
+        os.makedirs(f"{output_folder}/yolo/labels")
+        os.makedirs(f"{output_folder}/raw_detection_results")
+    except FileExistsError:
+        print("Output folders already exist. Skipping creation.")
 
     for filename in tqdm.tqdm(
         sorted(os.listdir(input_folder)),
         desc="Running inference with foundation model.",
     ):
-        if not filename.endswith(".png") and not filename.endswith(".jpg"):
+        image_id, ext = filename.split(".")
+        if ext not in {"png", "jpg", "jpeg"}:
             continue
 
-        image_id = filename.split(".")[0]
+        # Check if the label already exists.
+        if os.path.exists(f"{output_folder}/raw_detection_results/{image_id}.json"):
+            continue
+
         image_path = os.path.join(input_folder, filename)
         raw_image = PIL.Image.open(image_path).convert("RGB")
         image, _ = INFERENCE_TRANSFORM(raw_image, None)
