@@ -61,7 +61,6 @@ def cxcywh_to_x1y1x2y2(boxes: torch.Tensor):
 
 def render_labels(image: np.ndarray, boxes: torch.Tensor):
     h, w, _ = image.shape
-    image = image[:, :, ::-1]
 
     plt.clf()
     plt.imshow(image)
@@ -99,12 +98,17 @@ def has_overlapping_pair(boxes, iou_threshold=0.5):
     return False
 
 
-def no_track(reason, boxes):
-    return {"tracked": False, "reason": reason, "box_rejections": boxes}
+def no_track(reason: str, boxes: torch.Tensor, frame_id: int):
+    return {
+        "tracked": False,
+        "reason": reason,
+        "box_rejections": boxes,
+        "frame_id": frame_id,
+    }
 
 
-def track(box, reason):
-    return {"tracked": True, "reason": reason, "box": box}
+def track(box, reason, frame_id):
+    return {"tracked": True, "reason": reason, "box": box, "frame_id": frame_id}
 
 
 def x1y1x2y2_to_centered(box: torch.Tensor):
@@ -114,7 +118,7 @@ def x1y1x2y2_to_centered(box: torch.Tensor):
 
 
 def get_judgement_for_boxes(
-    image, boxes, previous_detection, history, distance_threshold=50
+    image, boxes, previous_detection, history, frame_id, distance_threshold
 ):
     """
     Returns (success, info).
@@ -122,12 +126,12 @@ def get_judgement_for_boxes(
     """
 
     if len(boxes) == 0:
-        return no_track("no_detections", boxes)
+        return no_track("no_detections", boxes, frame_id)
 
     if previous_detection is None:
         # Only give a detection to a human labeler if there is a single detection to check.
         if len(boxes) != 1:
-            return no_track("ambiguous_boxes_for_human_label", boxes)
+            return no_track("ambiguous_boxes_for_human_label", boxes, frame_id)
 
         box = boxes[0]
         # Reject if the previous was a human_rejection or a human_rejection_track and we are close to that.
@@ -142,13 +146,13 @@ def get_judgement_for_boxes(
                     x1y1x2y2_to_centered(rejection) - x1y1x2y2_to_centered(box)
                 ).norm()
                 if distance < distance_threshold:
-                    return no_track("human_rejection_track", boxes)
+                    return no_track("human_rejection_track", boxes, frame_id)
 
         render_labels(image, boxes)
         if "y" == input("Good? (y/n)"):
-            return track(boxes[0], "human_acceptance")
+            return track(boxes[0], "human_acceptance", frame_id)
         else:
-            return no_track("human_rejection", boxes)
+            return no_track("human_rejection", boxes, frame_id)
 
     previous_center = x1y1x2y2_to_centered(previous_detection)
     box_centers = x1y1x2y2_to_centered(boxes)
@@ -159,13 +163,13 @@ def get_judgement_for_boxes(
     best_box_distance = distances[best_box_indexes[0]]
 
     if best_box_distance > distance_threshold:
-        return no_track("distance_rejection", boxes)
+        return no_track("distance_rejection", boxes, frame_id)
 
     # Check for multiple overlapping boxes.
     if has_overlapping_pair(boxes[distances <= distance_threshold]):
-        return no_track("overlapping_boxes_rejection", boxes)
+        return no_track("overlapping_boxes_rejection", boxes, frame_id)
 
-    return track(best_box, "distance_acceptance")
+    return track(best_box, "distance_acceptance", frame_id)
 
 
 def remove_boxes_containing_points(
@@ -188,7 +192,10 @@ def remove_boxes_containing_points(
 
 
 IMAGE_SIZE = (2064, 960)
-FORBIDDEN_POINTS = {"front_left_center": [(2000, 900)]}
+FORBIDDEN_POINTS = {
+    "front_left_center": [(2000, 900)],
+    "rear_right": [(2000, 900), (1500, 700)],
+}
 
 
 def main():
@@ -214,29 +221,45 @@ def main():
 
     plt.figure(figsize=(8, 6))
 
-    history = []
+    with open("log_with_frame_ids.pkl", "rb") as f:
+        existing_history = pickle.load(f)
+        existing_history = {item["frame_id"]: item for item in existing_history}
     n_images = len(os.listdir(IMAGES_FOLDER))
+    history = []
 
     try:
-        for i in range(n_images):
-            frame = np.array(
-                PIL.Image.open(os.path.join(IMAGES_FOLDER, f"rear_right_{i + 1}.jpeg"))
+        for image_number in range(1, n_images + 1):
+            image_path = os.path.join(IMAGES_FOLDER, f"rear_right_{image_number}.jpeg")
+            label_path = os.path.join(
+                RAW_LABELS_FOLDER, f"rear_right_{image_number}.json"
             )
-            with open(os.path.join(RAW_LABELS_FOLDER, f"rear_right_{i + 1}.json")) as f:
+            if not (os.path.exists(image_path) and os.path.exists(label_path)):
+                continue
+
+            frame = np.array(PIL.Image.open(image_path))
+            with open(label_path) as f:
                 label = json.load(f)
+
+            if len(label["boxes"]) == 0:
+                continue
 
             boxes = torch.tensor(label["boxes"])
             logits = torch.tensor(label["logits"])
 
-            logging.info("frame %d.", i)
+            logging.info("frame %d.", image_number)
 
             print("Original boxes:", boxes)
 
-            # boxes = cxcywh_to_x1y1x2y2(boxes)
+            boxes = cxcywh_to_x1y1x2y2(boxes)
             boxes = remove_boxes_containing_points(boxes, forbidden_x, forbidden_y)
 
             result = get_judgement_for_boxes(
-                frame, boxes, most_recent_good_box, history, confidence_distance
+                frame,
+                boxes,
+                most_recent_good_box,
+                history,
+                image_number + 1,
+                confidence_distance,
             )
             print(result)
 
@@ -254,7 +277,7 @@ def main():
     except KeyboardInterrupt:
         logging.info("Interrupted.")
 
-    with open("log.pkl", "wb") as f:
+    with open("log_complete.pkl", "wb") as f:
         pickle.dump(history, f)
 
 
